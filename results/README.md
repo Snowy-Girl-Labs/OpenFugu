@@ -197,3 +197,26 @@ can route to an absent worker); the only difference is whether the head was
 k-of-n offered subsets via real multi-turn rollouts, beats the untrained base
 under the same masking. Held-out scale-up is the next step, not a mechanism
 question.
+
+## Real end-to-end serving — the trained head, served, answered live
+
+`eval/serve_e2e.py` is the honest proof that Fugu serves as one model. It does
+NOT call `Coordinator.run` directly — it boots the actual HTTP server
+(`openfugu/serve.py`) with the **trained per-step head** (`trinity_perstep.npy`)
+layered over the base SVF vector and a **real local worker pool** (no API), waits
+for `/health`, then POSTs a real GSM8K question to `/v1/chat/completions` and
+checks the answer came back through the full per-step loop from a real worker
+(not the mock). Log: [`serve_e2e_run.txt`](serve_e2e_run.txt).
+
+```
+server: trained head applied; worker pool LOCAL (2): llama-3.2-3b, gemma-3-4b
+POST /v1/chat/completions  ("Natalia sold clips ... altogether in April and May?")
+answer = 72  (gold 72)   turns = 2   pool: local=True mock=False
+PASS — real request answered correctly through the per-step loop over a real
+       local worker pool (not mock)
+```
+
+This closes the read→run→train→serve loop on real artifacts: the head trained by
+`train_trinity_perstep.py` is the head being served, the workers it routes to are
+the real local models it was trained against, and the answer is produced by the
+full multi-turn coordinator behind one OpenAI-compatible endpoint.

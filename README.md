@@ -64,11 +64,18 @@ python train/train_adaptive_pool_perstep.py    # REAL per-step: random k-of-n su
 # TRAIN: self-train the TRINITY coordinator from scratch (sep-CMA-ES, mock — no GPU/API)
 python train/train_trinity.py             # chance -> optimal routing; PASS in seconds
 
-# SERVE: Fugu as one model
+# SERVE: Fugu as one model (API worker pool via litellm)
 python openfugu/serve.py --slot-models "<csv>" --port 8088
 curl localhost:8088/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{"messages":[{"role":"user","content":"flatten a nested list in one line"}]}'
+
+# SERVE (real end-to-end): TRAINED per-step head + REAL local worker pool, no API
+python openfugu/serve.py --model <qwen3-0.6b dir> --vector model_iter_60.npy \
+  --head trinity_perstep.npy --local-models "<llama dir>,<gemma dir>" --port 8088
+# prove it end-to-end (boots the server, POSTs a real GSM8K question, checks the answer):
+python eval/serve_e2e.py --model <qwen3-0.6b dir> --vector model_iter_60.npy \
+  --head trinity_perstep.npy --local-models "<llama dir>,<gemma dir>"   # -> answer 72, PASS
 
 # EVAL: does orchestration beat the best single model? (the central Fugu claim)
 python eval/eval_orchestration.py        # trained coordinator +107% over best single, PASS
