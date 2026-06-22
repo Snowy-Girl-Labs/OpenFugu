@@ -1,5 +1,20 @@
 # Results
 
+> **Granularity caveat — read first (honest scoping).** The TRINITY routing
+> experiments below (`train_trinity_real.py`, `train_trinity_toolscale.py`, and
+> the `eval_orchestration.py` mock) are **per-QUESTION** routing: the router
+> reads the question once, picks ONE worker, and that worker answers the whole
+> question. This is query-level model selection (the RouterDC / MASRouter family).
+> **It is NOT Fugu's per-STEP coordination**, which is the real TRINITY mechanism:
+> per turn the router re-reads an *evolving* transcript (the question plus
+> `<reference_thought_N>` accumulated from earlier workers), re-routes a
+> (worker, role) action, the worker advances one step, and a verifier decides
+> termination. The per-step coordinator lives in `openfugu/mini.py` (`Coordinator`,
+> faithful to `step_trinity`); a per-step *training* loop over a real worker pool
+> is future work. The numbers below are real and reproducible, but they measure
+> query-level routing, not multi-turn coordination — labeling them "TRINITY
+> router" earlier overstated the alignment, corrected here.
+
 ## Conductor GRPO on ToolScale
 
 ![Conductor GRPO reward curve](conductor_grpo_reward.png)

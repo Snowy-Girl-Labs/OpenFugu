@@ -22,7 +22,7 @@ endpoint. Four stages, all working: **read → run → train → serve.**
 | **run** | `openfugu/mini.py` (TRINITY: hidden-state → linear head → worker); `openfugu/ultra.py` (Conductor: workflow-DAG) | `mini.py --self-test` = **95% agent / 100% role** on the 37-case fixture, real weights |
 | **train** | `train/train_trinity.py` — self-train the **TRINITY** coordinator from scratch via sep-CMA-ES (no Sakana weights); `train/train_conductor.py` — GRPO a **Conductor** on `nvidia/ToolScale` | TRINITY: chance→optimal routing in ~5 generations (mock, runs anywhere); Conductor: reward **1.21 → 1.64** over 100 steps ([curve](results/)) |
 | **serve** | `openfugu/serve.py` — one OpenAI-compatible `/v1/chat/completions`; internal TRINITY loop over a litellm pool | `curl` returns one answer; pool hidden |
-| **eval** | `eval/eval_orchestration.py` — does orchestration beat the best single model? | trained coordinator **+107%** over best single worker, **100%** of oracle |
+| **eval** | `eval/eval_orchestration.py` — does **per-question** routing beat the best single model? | trained router **+107%** over best single worker (query-level routing, **not** per-step coordination — see [results caveat](results/)) |
 
 ## Quickstart
 
