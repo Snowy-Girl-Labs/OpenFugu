@@ -100,29 +100,45 @@ parser being strict on a reasoning model's long-CoT output, not the model being
 incapable. The headline holds: the real-data router loop runs, and on
 complementary multi-domain workers the coordinator > best single model.
 
-## Recursive Conductor — REAL GRPO finetune (runs; reward saturated)
+## Recursive Conductor — REAL recursion (round-0 fed back), honest TIE on held-out
 
-`train/train_recursion_real.py` finetunes our trained Conductor
-(conductor_toolscale_100/checkpoint-100) with GRPO so it can name itself as a
-worker and revise across rounds (Fugu-Ultra's test-time-scaling axis). Real 3B
-model, real trl GRPO, ToolScale reward, 30 steps. Log:
-[`recursion_real_run.txt`](recursion_real_run.txt). Saved weights:
-`conductor_recursion/`.
+`train/train_recursion_real.py` is now genuinely recursive. An earlier version
+of this file was single-round GRPO with "recursion" only in the docstring — the
+round-0 output was never fed back. The current version subclasses `GRPOTrainer`
+and overrides `_generate_and_score_completions` to (1) run a round-0 self-rollout
+on each question, (2) splice round-0's own output + a correction instruction
+(wording from the released `recursion_formats.py`) into the prompt, (3) run
+standard GRPO on that round-1 "revise" prompt. Round-1 literally sees its own
+round-0 attempt — faithful to `conductor_recursion_engine`. Real 3B model, real
+trl GRPO, ToolScale reward, 30 steps from `conductor_toolscale_100/checkpoint-100`.
+Log: [`recursion_real_run.txt`](recursion_real_run.txt). Weights:
+`conductor_recursion_real/`.
+
+**The training reward is the WRONG metric** (and we no longer report a PASS from
+it): on ToolScale-easy the base Conductor's plans are already strong, so the 8
+samples in a GRPO group score near-identically → `reward_std≈0` → no gradient.
+That saturation is real and visible in the log. The HONEST metric is held-out:
+`eval/eval_recursion_real.py` scores the round-0 plan, feeds it back, and scores
+the round-1 revised plan on 40 held-out questions.
 
 ```
-base=checkpoint-100  reward steady ~1.70 (format 1.0 + action 0.70)
-train_runtime 143s, loss ~= 0
+round-0 mean score = 0.617
+round-1 mean score = 0.616   (-0.2%)
+questions improved by revise = 0/40 ; regressed = 1
+on round-0 misses, revise delta = -0.001
+TIE — revise neither helps nor hurts (round-0 already strong; greedy → round-1
+      reproduces round-0)
 ```
 
-**Honest result:** the real recursive finetune **runs end-to-end and saves a
-model**, but does NOT show a recursion *gain* here — `reward_std=0`,
-`frac_reward_zero_std=1.0`, `loss≈0` mean the reward is **saturated**: the base
-Conductor was already strong on ToolScale (~1.70), so GRPO sees no group variance
-and therefore no gradient. The mock `train_recursion.py` shows the +9% recursion
-lift precisely because it starts from a non-saturated toy policy with headroom.
-To show the gain on the real model you'd start from a weaker base or a harder
-task that leaves room to improve — the loop itself is proven to run on the real
-model. This is the last of Fugu-Ultra's mechanisms taken from mock to a real run.
+**Honest result: TIE, not a gain.** The recursion *mechanism* is real and runs
+end-to-end (round-0 → feed-back → round-1, verified), but on this base+task the
+revise round does not improve the plan. Recursion (test-time scaling) only pays
+off when round-0 is actually wrong and there is something to fix; a strong base
+on easy tool-planning, decoded greedily, leaves round-1 nothing to do. This
+**contradicts the mock `train_recursion.py`'s "+9% PASS"** — that lift comes from
+a non-saturated toy policy with headroom, and we no longer present it as evidence
+about the real model. To show a real recursion gain you'd start from a weaker
+base or a harder task. The mechanism is proven; the gain is not, and we say so.
 
 ## Per-STEP TRINITY training — the real granularity (not per-question)
 

@@ -52,7 +52,9 @@ python openfugu/mini.py --demo --live \
 python train/train_conductor.py           # reward climbs off zero; saves checkpoint
 
 # TRAIN: Fugu-Ultra recursive topology — Conductor revises its own output (test-time scaling)
-python train/train_recursion.py           # learns to recurse; +9% over one-shot, PASS
+python train/train_recursion.py           # mock: +9% over one-shot (toy policy w/ headroom)
+python train/train_recursion_real.py      # REAL recursion (round-0 fed back into round-1)
+python eval/eval_recursion_real.py        # honest held-out: round-0 vs round-1 → TIE (see results/)
 
 # TRAIN: adaptive k-of-n pool — generalize to arbitrary worker subsets (swap the pool)
 python train/train_adaptive_pool.py       # subset-aware routing +44% over blind, 94% of oracle, PASS
