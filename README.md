@@ -50,6 +50,9 @@ python openfugu/mini.py --demo --live \
 # TRAIN: a Conductor on ToolScale (8x A800-class; HF generation, no vLLM)
 python train/train_conductor.py           # reward climbs off zero; saves checkpoint
 
+# TRAIN: Fugu-Ultra recursive topology — Conductor revises its own output (test-time scaling)
+python train/train_recursion.py           # learns to recurse; +9% over one-shot, PASS
+
 # TRAIN: self-train the TRINITY coordinator from scratch (sep-CMA-ES, mock — no GPU/API)
 python train/train_trinity.py             # chance -> optimal routing; PASS in seconds
 
