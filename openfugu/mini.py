@@ -105,16 +105,12 @@ class FuguRouter:
     which is what makes a routing decision ~one forward pass. [EXEC]
     """
 
-    def __init__(self, model_dir: str, vector_path: str, dtype="float32",
+    def __init__(self, model_dir: str, vector_path: str | None = None, dtype="float32",
                  device: str | None = None, seed: int | None = None):
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
         self.torch = torch
         self.rng = np.random.default_rng(seed)
-
-        vec = np.load(vector_path).astype(np.float64)
-        if vec.shape != (VEC_LEN,):
-            raise ValueError(f"router vector must be {VEC_LEN} floats, got {vec.shape}")
 
         self.tok = AutoTokenizer.from_pretrained(model_dir)
         # transformers >=5 uses dtype=, <5 uses torch_dtype= — support both
@@ -127,9 +123,25 @@ class FuguRouter:
             self.model.to(device)
         self.device = next(self.model.parameters()).device
 
-        self._apply_svf(vec[:SVF_LEN])
-        # head: last 10240 -> (10, 1024) [EXEC]
-        self.head = torch.from_numpy(vec[SVF_LEN:].copy()).float().reshape(HEAD_ROWS, HIDDEN).to(self.device)
+        checkpoint_dir = os.environ.get("FUGU_CHECKPOINT_DIR")
+        if checkpoint_dir:
+            from .materialized import load_materialized
+            weights, head = load_materialized(checkpoint_dir)
+            with torch.no_grad():
+                sd = self.model.state_dict()
+                for k, w in weights.items():
+                    sd[k].copy_(w.to(device=self.device, dtype=td))
+            self.svf_keys = list(weights.keys())
+            self.head = head.to(device=self.device, dtype=torch.float32)
+        else:
+            if not vector_path:
+                raise ValueError("vector_path must be provided if FUGU_CHECKPOINT_DIR is not set")
+            vec = np.load(vector_path).astype(np.float64)
+            if vec.shape != (VEC_LEN,):
+                raise ValueError(f"router vector must be {VEC_LEN} floats, got {vec.shape}")
+            self._apply_svf(vec[:SVF_LEN])
+            # head: last 10240 -> (10, 1024) [EXEC]
+            self.head = torch.from_numpy(vec[SVF_LEN:].copy()).float().reshape(HEAD_ROWS, HIDDEN).to(self.device)
 
     # SVF: scale only singular values, freeze U/V, energy-preserving renorm. [CODE]
     # Matrices consumed in state_dict order: embed_tokens, layer-26 {q,k,v,o,
