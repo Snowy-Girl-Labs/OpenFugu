@@ -25,3 +25,4 @@ results/*.out
 *.log
 conductor_*_out/
 conductor_toolscale_*/
+.tokensave
