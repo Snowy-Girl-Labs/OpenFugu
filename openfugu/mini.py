@@ -125,7 +125,10 @@ class FuguRouter:
 
         checkpoint_dir = os.environ.get("FUGU_CHECKPOINT_DIR")
         if checkpoint_dir:
-            from .materialized import load_materialized
+            try:
+                from .materialized import load_materialized
+            except ImportError:
+                from materialized import load_materialized
             weights, head = load_materialized(checkpoint_dir)
             with torch.no_grad():
                 sd = self.model.state_dict()
