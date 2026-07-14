@@ -2,40 +2,37 @@
 # OpenFugu — Apache-2.0. Part of an independent, open reimplementation of
 # the Fugu orchestrator. NOT affiliated with Sakana AI. See NOTICE.
 # Reference: TRINITY (arXiv:2512.04695). Self-trains the coordinator via
-# sep-CMA-ES on REAL data (GSM8K) with a real worker pool — the real-data
-# upgrade of train_trinity.py's mock loop. Original code.
+# sep-CMA-ES on REAL coding data (HumanEval) with a real worker pool — the
+# coding-benchmark variant of train_trinity_real.py. Original code.
 """
-train_trinity_real.py — TRINITY self-training on REAL GSM8K with a real pool.
+train_trinity_coding.py — TRINITY self-training on HumanEval coding benchmark.
 
-Same sep-CMA-ES loop as train_trinity.py, but everything mock is now real:
-  - tasks   : GSM8K questions (openai/gsm8k), answer = the number after '####'
-  - features: a REAL Qwen3-0.6B penultimate hidden state of the question
+Same sep-CMA-ES loop as train_trinity_real.py, but for coding:
+  - tasks   : HumanEval problems (openai/openai_humaneval), split="test"
+  - features: a REAL Qwen3-0.6B penultimate hidden state of the prompt
   - workers : a real pool via litellm (Novita), differing models
-  - reward  : numeric-answer match (the verifiable signal sep-CMA-ES optimizes)
+  - reward  : real code execution (verifiable signal via Python subprocess execution)
 
 The coordinator (bias-free linear head over the hidden state) learns which
-worker to send each question to, to maximize solved rate. Minimal scale by
-default so it runs cheaply; scale up via flags. Goal: beat random routing.
-
-ponytail: reuses the ask/tell structure; no new framework, no sandbox — GSM8K
-reward is just a number compare.
+worker to send each coding problem to, to maximize solved rate.
 """
 from __future__ import annotations
-import argparse, os, re, sys, time
+import argparse, os, re, subprocess, sys, tempfile, time
 import numpy as np
 
 HIDDEN = 1024
 HIDDEN_POS = -2
 
 
-def numeric_answer(text: str):
-    """Last integer/decimal in the text (GSM8K answers are numbers)."""
-    nums = re.findall(r"-?\d[\d,]*\.?\d*", text.replace(",", ""))
-    return nums[-1] if nums else None
-
-
-def gold_answer(ans_field: str):
-    return ans_field.split("####")[-1].strip().replace(",", "")
+def extract_completion(text: str) -> str:
+    """Extract candidate completion from fenced block or use raw response as-is."""
+    m = re.search(r"```python\n(.*?)\n?```", text, re.DOTALL)
+    if m:
+        return m.group(1)
+    m = re.search(r"```\n(.*?)\n?```", text, re.DOTALL)
+    if m:
+        return m.group(1)
+    return text
 
 
 class Backbone:
@@ -73,15 +70,15 @@ def route(head_vec, feat, n_workers):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="TRINITY self-train on real GSM8K (minimal).")
+    ap = argparse.ArgumentParser(description="TRINITY self-train on HumanEval (minimal).")
     ap.add_argument("--model", default=os.environ.get("FUGU_MODEL", "Qwen/Qwen3-0.6B"))
     ap.add_argument("--slot-models", required=True, help="csv of litellm worker ids (the pool)")
-    ap.add_argument("--n-train", type=int, default=12, help="GSM8K questions (kept small/cheap)")
-    ap.add_argument("--iters", type=int, default=8)
+    ap.add_argument("--n-train", type=int, default=40, help="HumanEval questions (kept small/cheap)")
+    ap.add_argument("--iters", type=int, default=25)
     ap.add_argument("--sigma0", type=float, default=0.5)
-    ap.add_argument("--max-tokens", type=int, default=512)
+    ap.add_argument("--max-tokens", type=int, default=768)
     ap.add_argument("--seed", type=int, default=42)
-    ap.add_argument("--out", default="trinity_gsm8k.npy")
+    ap.add_argument("--out", default="trinity_humaneval.npy")
     args = ap.parse_args()
 
     import cma, litellm
@@ -92,23 +89,32 @@ def main():
     api_key = os.environ.get("FUGU_API_KEY") or os.environ.get("NOVITA_API_KEY") or os.environ.get("OPENAI_API_KEY")
     api_base = os.environ.get("FUGU_BASE_URL") or os.environ.get("OPENAI_BASE_URL")
 
-    ds = load_dataset("openai/gsm8k", "main", split=f"train[:{args.n_train}]")
-    tasks = [(r["question"], gold_answer(r["answer"])) for r in ds]
-    print(f"[real-train] {len(tasks)} GSM8K tasks, {n_workers} workers: {workers}", flush=True)
+    ds = load_dataset("openai/openai_humaneval", split="test")
+    tasks = list(ds)[:args.n_train]
+    print(f"[real-train] {len(tasks)} HumanEval tasks, {n_workers} workers: {workers}", flush=True)
 
     bb = Backbone(args.model)
-    feats = [bb.feature(q) for q, _ in tasks]      # cache real hidden states once
+    feats = [bb.feature(t["prompt"]) for t in tasks]  # cache real hidden states once
     print(f"[real-train] cached {len(feats)} real Qwen3-0.6B features (dim {feats[0].shape[0]})", flush=True)
 
-    # worker call cache: (worker, question) -> solved? so CMA candidates reuse answers
+    # worker call cache: (worker_id, task_id) -> solved? so CMA candidates reuse answers
     solve_cache: dict = {}
-    def worker_solves(wid, q, gold):
-        key = (wid, q)
+
+    def worker_solves(wid, task):
+        task_id = task["task_id"]
+        key = (wid, task_id)
         if key in solve_cache:
             return solve_cache[key]
+
+        prompt = task["prompt"]
+        test = task["test"]
+        entry_point = task["entry_point"]
+
+        worker_prompt = prompt + "\nComplete this Python function. Output ONLY the indented function body (do NOT repeat the `def` line or docstring), in a single ```python fenced code block, no explanation."
+
         kw = dict(model=workers[wid],
                   messages=[{"role": "user",
-                             "content": q + "\nGive the final numeric answer at the end."}],
+                             "content": worker_prompt}],
                   max_tokens=args.max_tokens, temperature=0.0, timeout=45)
         if api_key: kw["api_key"] = api_key
         if api_base: kw["api_base"] = api_base
@@ -116,7 +122,28 @@ def main():
         for attempt in range(5):
             try:
                 out = litellm.completion(**kw).choices[0].message.content or ""
-                ok = 1.0 if numeric_answer(out) == gold else 0.0
+                candidate = extract_completion(out)
+
+                # Grading (the reward)
+                full_code = prompt + "\n" + candidate + "\n" + test + f"\ncheck({entry_point})\n"
+                tmp_file = tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False, encoding="utf-8")
+                tmp_path = tmp_file.name
+                try:
+                    tmp_file.write(full_code)
+                    tmp_file.close()
+                    res = subprocess.run([sys.executable, tmp_path], capture_output=True, timeout=10)
+                    ok = 1.0 if res.returncode == 0 else 0.0
+                except subprocess.TimeoutExpired:
+                    ok = 0.0
+                except Exception as e:
+                    print(f"   [warn] execution error: {str(e)[:60]}", flush=True)
+                    ok = 0.0
+                finally:
+                    try:
+                        if os.path.exists(tmp_path):
+                            os.unlink(tmp_path)
+                    except Exception:
+                        pass
                 break
             except litellm.RateLimitError:
                 wait = 2 ** attempt
@@ -131,21 +158,21 @@ def main():
 
     def fitness(head_vec):
         tot = 0.0
-        for (q, gold), feat in zip(tasks, feats):
+        for task, feat in zip(tasks, feats):
             wid = route(head_vec, feat, n_workers)
-            tot += worker_solves(wid, q, gold)
+            tot += worker_solves(wid, task)
         return tot / len(tasks)
 
     # baseline: each worker alone + random (uses the same cache -> cheap)
     rng = np.random.default_rng(args.seed)
     per_worker = []
     for w in range(n_workers):
-        per_worker.append(np.mean([worker_solves(w, q, g) for q, g in tasks]))
+        per_worker.append(np.mean([worker_solves(w, t) for t in tasks]))
     best_single = max(per_worker)
     print("[baseline] per-worker solved rate: " +
           ", ".join(f"{workers[w].split('/')[-1]}={per_worker[w]:.2f}" for w in range(n_workers)), flush=True)
 
-    # sep-CMA-ES over the head (SVF frozen for this minimal real run)
+    # sep-CMA-ES over the head
     dim = n_workers * HIDDEN
     es = cma.CMAEvolutionStrategy(np.zeros(dim), args.sigma0,
                                   {"seed": args.seed, "verbose": -9, "CMA_diagonal": True})
@@ -163,11 +190,11 @@ def main():
     np.save(args.out, best_vec)
     print(f"\n[result] coordinator solved {best_fit:.3f} vs best single worker {best_single:.3f}")
     print(f"[result] learned routing per task:")
-    for (q, g), feat in zip(tasks, feats):
+    for task, feat in zip(tasks, feats):
         w = route(best_vec, feat, n_workers)
-        print(f"   -> {workers[w].split('/')[-1]:24s} | {q[:50]}")
+        print(f"   -> {workers[w].split('/')[-1]:24s} | {task['prompt'][:50]}")
     if best_fit >= best_single:
-        print("PASS — sep-CMA-ES self-trained TRINITY on REAL GSM8K, "
+        print("PASS — sep-CMA-ES self-trained TRINITY on REAL HumanEval, "
               "coordinator >= best single worker")
 
 

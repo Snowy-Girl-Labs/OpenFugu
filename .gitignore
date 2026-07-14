@@ -1,3 +1,6 @@
+# machine-local Claude Code artifacts
+CLAUDE.local.md
+
 # caches / build
 __pycache__/
 *.pyc
