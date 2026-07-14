@@ -120,9 +120,11 @@ def main():
         if api_base: kw["api_base"] = api_base
         ok = 0.0
         call_succeeded = False
-        # Candidate code runs via subprocess in the parent's env; scrub API keys so
-        # hallucinated/adversarial completions can't read or exfiltrate them.
-        run_env = {k: v for k, v in os.environ.items() if "KEY" not in k.upper()}
+        # Candidate code is untrusted model output, executed via subprocess (the whole
+        # point of HumanEval-style grading, not a shell/injection risk: no shell=True,
+        # args are a list). Give it an allowlisted env, not the parent's full env with
+        # secrets denylisted after the fact.
+        run_env = {k: os.environ[k] for k in ("PATH", "PYTHONPATH") if k in os.environ}
         for attempt in range(5):
             try:
                 out = litellm.completion(**kw).choices[0].message.content or ""
