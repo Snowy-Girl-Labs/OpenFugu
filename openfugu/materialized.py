@@ -45,10 +45,15 @@ def load_materialized(checkpoint_dir: str) -> tuple[dict[str, torch.Tensor], tor
             if matching_keys:
                 tensor = tensors_dict[matching_keys[0]]
             else:
-                tensor = list(tensors_dict.values())[0]
+                raise KeyError(
+                    f"Tensor key {path_key!r} for {source_name!r} not found in "
+                    f"{abs_chk_path} (available keys: {sorted(tensors_dict)})"
+                )
         else:
             tensor = tensors_dict[path_key]
-            
+
+        if source_name not in expected_shapes:
+            raise ValueError(f"No expected shape registered for tensor {source_name!r}")
         expected_shape = expected_shapes[source_name]
         if source_name in [
             "model.layers.26.self_attn.k_proj.weight",
