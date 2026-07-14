@@ -119,10 +119,15 @@ def main():
         if api_key: kw["api_key"] = api_key
         if api_base: kw["api_base"] = api_base
         ok = 0.0
+        call_succeeded = False
+        # Candidate code runs via subprocess in the parent's env; scrub API keys so
+        # hallucinated/adversarial completions can't read or exfiltrate them.
+        run_env = {k: v for k, v in os.environ.items() if "KEY" not in k.upper()}
         for attempt in range(5):
             try:
                 out = litellm.completion(**kw).choices[0].message.content or ""
                 candidate = extract_completion(out)
+                call_succeeded = True
 
                 # Grading (the reward)
                 full_code = prompt + "\n" + candidate + "\n" + test + f"\ncheck({entry_point})\n"
@@ -131,7 +136,7 @@ def main():
                 try:
                     tmp_file.write(full_code)
                     tmp_file.close()
-                    res = subprocess.run([sys.executable, tmp_path], capture_output=True, timeout=10)
+                    res = subprocess.run([sys.executable, tmp_path], capture_output=True, timeout=10, env=run_env)
                     ok = 1.0 if res.returncode == 0 else 0.0
                 except subprocess.TimeoutExpired:
                     ok = 0.0
@@ -152,6 +157,11 @@ def main():
             except Exception as e:
                 print(f"   [warn] worker {wid} call failed: {str(e)[:60]}", flush=True)
                 break
+        if not call_succeeded:
+            # Transient/exhausted call failure, not a graded answer — don't poison the
+            # cache with a fake "unsolved" that would stick for the rest of the run.
+            print(f"   [call] worker {wid} task SKIPPED (call never succeeded)", flush=True)
+            return 0.0
         solve_cache[key] = ok
         print(f"   [call] worker {wid} task done -> {'OK' if ok else 'miss'} (cache={len(solve_cache)})", flush=True)
         return ok

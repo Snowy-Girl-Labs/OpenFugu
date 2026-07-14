@@ -113,10 +113,12 @@ def main():
         if api_key: kw["api_key"] = api_key
         if api_base: kw["api_base"] = api_base
         ok = 0.0
+        call_succeeded = False
         for attempt in range(5):
             try:
                 out = litellm.completion(**kw).choices[0].message.content or ""
                 ok = 1.0 if numeric_answer(out) == gold else 0.0
+                call_succeeded = True
                 break
             except litellm.RateLimitError:
                 wait = 2 ** attempt
@@ -125,6 +127,11 @@ def main():
             except Exception as e:
                 print(f"   [warn] worker {wid} call failed: {str(e)[:60]}", flush=True)
                 break
+        if not call_succeeded:
+            # Transient/exhausted call failure, not a graded answer — don't poison the
+            # cache with a fake "unsolved" that would stick for the rest of the run.
+            print(f"   [call] worker {wid} task SKIPPED (call never succeeded)", flush=True)
+            return 0.0
         solve_cache[key] = ok
         print(f"   [call] worker {wid} task done -> {'OK' if ok else 'miss'} (cache={len(solve_cache)})", flush=True)
         return ok
